@@ -1206,6 +1206,10 @@ run(function()
 end)
 
 run(function()
+	local mousemoverel = mousemoverel or (getgenv and getgenv().mousemoverel) or function()
+		return false
+	end
+
 	local AimMode, TargetMode, Priority, VerticalAim, IgnoreWalls, AimSpeed, Smoothness, Shake, Prediction
 	local shakeTick = 0
 
@@ -1231,7 +1235,7 @@ run(function()
 		return Vector3.new(vel.X, vel.Y * 0.5, vel.Z) * lead
 	end
 
-	local function selectTarget(center)
+	local function selectTarget(cursor)
 		local mypos = entitylib.isAlive and entitylib.character.HumanoidRootPart.Position
 		local best, bestScore
 
@@ -1255,9 +1259,8 @@ run(function()
 				elseif Priority.Value == 'Lowest Health' then
 					score = entity.Health
 				else
-					local screen, visible = gameCamera:WorldToViewportPoint(pos)
-					if not visible then continue end
-					score = (Vector2.new(screen.X, screen.Y) - center).Magnitude
+					local screen = gameCamera:WorldToViewportPoint(pos)
+					score = (Vector2.new(screen.X, screen.Y) - cursor).Magnitude
 				end
 
 				if score < (bestScore or math.huge) then
@@ -1273,51 +1276,49 @@ run(function()
 		if not entitylib.isAlive then return end
 		if fable.gui.ScaledGui.ClickGui.Visible then return end
 
-		local target = selectTarget(gameCamera.ViewportSize / 2)
+		local cursor = inputService:GetMouseLocation() - guiService:GetGuiInset()
+		local target = selectTarget(cursor)
 		if not target then return end
 
 		local part = target.Head or target.RootPart
 		if not part then return end
 
-		local camCF = gameCamera.CFrame
 		local aimPosition = part.Position + getVelocityLead(target)
-		local dir = aimPosition - camCF.Position
-		if dir.Magnitude < 0.05 then return end
+		local screen, visible = gameCamera:WorldToViewportPoint(aimPosition)
+		if not visible or screen ~= screen then return end
 
-		local yaw, pitch, roll = camCF:ToOrientation()
+		local dx = screen.X - cursor.X
+		local dy = screen.Y - cursor.Y
 
-		local goalYaw = math.atan2(-dir.X, -dir.Z)
-		local dYaw = (goalYaw - yaw + math.pi) % (2 * math.pi) - math.pi
-
-		local dPitch = 0
-		if VerticalAim.Enabled then
-			local goalPitch = math.asin(math.clamp(dir.Y / dir.Magnitude, -1, 1))
-			dPitch = (goalPitch - pitch + math.pi) % (2 * math.pi) - math.pi
+		if not VerticalAim.Enabled then
+			dy = 0
 		end
 
-		local errDeg = math.deg(math.sqrt(dYaw * dYaw + dPitch * dPitch))
+		local errDist = math.sqrt(dx * dx + dy * dy)
+		if errDist < 0.5 then return end
+
 		local speed = (AimSpeed.Value / 100) * 14 / Smoothness.Value
 		if AimMode.Value == 'Adaptive' then
-			speed *= 0.3 + math.min(errDeg / 30, 1) * 1.7
+			speed *= 0.3 + math.min(errDist / 300, 1) * 1.7
 		end
 
-		local alpha = 1 - 0.5 ^ (dt * speed)
-		yaw += dYaw * alpha
-		pitch += dPitch * alpha
+		local alpha = math.clamp(1 - 0.5 ^ (dt * speed), 0, 1)
+		dx *= alpha
+		dy *= alpha
 
 		if Shake.Value > 0 then
 			shakeTick += dt
-			local amplitude = Shake.Value * 0.0008
-			yaw += math.sin(shakeTick * 21) * amplitude
-			pitch += math.cos(shakeTick * 27) * amplitude
+			local amplitude = Shake.Value * 0.6
+			dx += math.sin(shakeTick * 21) * amplitude
+			dy += math.cos(shakeTick * 27) * amplitude
 		end
 
-		gameCamera.CFrame = CFrame.new(camCF.Position) * CFrame.fromOrientation(yaw, math.clamp(pitch, -math.rad(80), math.rad(80)), roll)
+		pcall(mousemoverel, dx, dy)
 	end
 
 	local AimAssist = fable.Categories.Combat:CreateModule({
 		Name = 'Aim Assist',
-		Tooltip = 'Rotates your camera towards targets.',
+		Tooltip = 'Moves your cursor onto targets.',
 		Function = function(callback)
 			if callback then
 				table.insert(AimAssist.Connections, runService.RenderStepped:Connect(onStep))
@@ -1383,4 +1384,5 @@ run(function()
 		Tooltip = 'Leads the target based on their velocity and your ping.'
 	})
 end)
+
 
