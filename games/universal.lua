@@ -1206,98 +1206,157 @@ run(function()
 end)
 
 run(function()
-	local hasMouseMove = mousemoverel ~= nil
-	local mousemoverel = mousemoverel or function(dx, dy)
-		local input = getrenv and getrenv().input
-		return input and input.MouseMove and input.MouseMove(dx, dy) or false
-	end
+	local AimMode, TargetMode, Priority, VerticalAim, IgnoreWalls, AimSpeed, Smoothness, Shake, Prediction
+	local shakeTick = 0
 
-	local AimPart, Fov, Smoothness, ShowFov, WallCheck, HoldKey
-	local holding = false
+	local function getVelocityLead(entity)
+		local ping = 0
+		pcall(function()
+			ping = lplr:GetNetworkPing()
+		end)
 
-	local circle
-	if Drawing then
-		circle = Drawing.new('Circle')
-		circle.Thickness = 1.5
-		circle.NumSides = 64
-		circle.Filled = false
-		circle.Color = Color3.fromRGB(255, 255, 255)
-		circle.Visible = false
-	end
-	fable:Clean(function()
-		if circle then
-			circle:Remove()
+		local ok, vel = pcall(function()
+			return entity.RootPart.AssemblyLinearVelocity
+		end)
+		vel = (ok and typeof(vel) == 'Vector3') and vel or Vector3.zero
+		if vel.Magnitude < 0.5 then
+			return Vector3.zero
 		end
-	end)
 
-	local function getTargetPosition(mousepos)
-		local bestpos, bestdist
+		local lead = (Prediction.Value / 100) * (0.12 + math.clamp(ping, 0, 0.4))
+		if AimMode.Value == 'Adaptive' then
+			lead *= 1 + math.min(vel.Magnitude / 32, 1) * 0.5
+		end
+
+		return Vector3.new(vel.X, vel.Y * 0.5, vel.Z) * lead
+	end
+
+	local function selectTarget(center)
+		local mypos = entitylib.isAlive and entitylib.character.HumanoidRootPart.Position
+		local best, bestScore
+
 		for _, entity in entitylib.List do
 			if entity.Targetable and entitylib.isVulnerable(entity) then
-				local part = entity[AimPart.Value]
-				if part then
-					local position, visible = gameCamera:WorldToViewportPoint(part.Position)
-					if visible then
-						local dist = (Vector2.new(position.X, position.Y) - mousepos).Magnitude
-						if dist <= Fov.Value and dist < (bestdist or math.huge) then
-							if not WallCheck.Enabled or not entitylib.Wallcheck(gameCamera.CFrame.Position, part.Position) then
-								bestpos, bestdist = Vector2.new(position.X, position.Y), dist
-							end
-						end
-					end
+				if TargetMode.Value ~= 'Both' then
+					if TargetMode.Value == 'Players' and not entity.Player then continue end
+					if TargetMode.Value == 'NPCs' and not entity.NPC then continue end
+				end
+
+				local part = entity.Head or entity.RootPart
+				local pos = part and part.Position
+				if not pos then continue end
+
+				if IgnoreWalls.Enabled and entitylib.Wallcheck(gameCamera.CFrame.Position, pos) then continue end
+
+				local score
+				if Priority.Value == 'Closest to Player' then
+					if not mypos then continue end
+					score = (pos - mypos).Magnitude
+				elseif Priority.Value == 'Lowest Health' then
+					score = entity.Health
+				else
+					local screen, visible = gameCamera:WorldToViewportPoint(pos)
+					if not visible then continue end
+					score = (Vector2.new(screen.X, screen.Y) - center).Magnitude
+				end
+
+				if score < (bestScore or math.huge) then
+					best, bestScore = entity, score
 				end
 			end
 		end
 
-		return bestpos
+		return best
 	end
 
-	local function onStep()
-		local mousepos = inputService:GetMouseLocation() - guiService:GetGuiInset()
+	local function onStep(dt)
+		if not entitylib.isAlive then return end
+		if fable.gui.ScaledGui.ClickGui.Visible then return end
 
-		if circle then
-			circle.Position = inputService:GetMouseLocation()
-			circle.Radius = Fov.Value
-			circle.Visible = ShowFov.Enabled and not fable.gui.ScaledGui.ClickGui.Visible
+		local target = selectTarget(gameCamera.ViewportSize / 2)
+		if not target then return end
+
+		local part = target.Head or target.RootPart
+		if not part then return end
+
+		local camCF = gameCamera.CFrame
+		local aimPosition = part.Position + getVelocityLead(target)
+		local dir = aimPosition - camCF.Position
+		if dir.Magnitude < 0.05 then return end
+
+		local yaw, pitch, roll = camCF:ToOrientation()
+
+		local goalYaw = math.atan2(-dir.X, -dir.Z)
+		local dYaw = (goalYaw - yaw + math.pi) % (2 * math.pi) - math.pi
+
+		local dPitch = 0
+		if VerticalAim.Enabled then
+			local goalPitch = math.asin(math.clamp(dir.Y / dir.Magnitude, -1, 1))
+			dPitch = (goalPitch - pitch + math.pi) % (2 * math.pi) - math.pi
 		end
 
-		if not entitylib.isAlive then return end
-		local targetpos = getTargetPosition(mousepos)
-		if not targetpos then return end
-		if #HoldKey.Keys > 0 and not holding then return end
+		local errDeg = math.deg(math.sqrt(dYaw * dYaw + dPitch * dPitch))
+		local speed = (AimSpeed.Value / 100) * 14 / Smoothness.Value
+		if AimMode.Value == 'Adaptive' then
+			speed *= 0.3 + math.min(errDeg / 30, 1) * 1.7
+		end
 
-		local smoothness = Smoothness.Value
-		mousemoverel((targetpos.X - mousepos.X) / smoothness, (targetpos.Y - mousepos.Y) / smoothness)
+		local alpha = 1 - 0.5 ^ (dt * speed)
+		yaw += dYaw * alpha
+		pitch += dPitch * alpha
+
+		if Shake.Value > 0 then
+			shakeTick += dt
+			local amplitude = Shake.Value * 0.0008
+			yaw += math.sin(shakeTick * 21) * amplitude
+			pitch += math.cos(shakeTick * 27) * amplitude
+		end
+
+		gameCamera.CFrame = CFrame.new(camCF.Position) * CFrame.fromOrientation(yaw, math.clamp(pitch, -math.rad(80), math.rad(80)), roll)
 	end
 
 	local AimAssist = fable.Categories.Combat:CreateModule({
 		Name = 'Aim Assist',
-		Tooltip = 'Smoothly moves your crosshair towards the closest target.',
+		Tooltip = 'Rotates your camera towards targets.',
 		Function = function(callback)
 			if callback then
-				if not hasMouseMove then
-					notif('Aim Assist', 'Your executor does not support mouse movement!', 5, 'warning')
-				end
 				table.insert(AimAssist.Connections, runService.RenderStepped:Connect(onStep))
-			elseif circle then
-				circle.Visible = false
 			end
 		end
 	})
 
-	AimPart = AimAssist:CreateDropdown({
-		Name = 'Target Part',
-		List = { 'Head', 'HumanoidRootPart' },
-		Default = 'Head',
-		Tooltip = 'Which body part to aim towards.'
+	AimMode = AimAssist:CreateDropdown({
+		Name = 'Mode',
+		List = { 'Simple', 'Adaptive' },
+		Tooltip = 'Simple = constant smoothing. Adaptive = speeds up when far, slows down on target.'
 	})
-	Fov = AimAssist:CreateSlider({
-		Name = 'FOV',
-		Min = 10,
-		Max = 500,
-		Default = 120,
-		Suffix = 'px',
-		Tooltip = 'How far from your crosshair targets are detected.'
+	TargetMode = AimAssist:CreateDropdown({
+		Name = 'Target Mode',
+		List = { 'Players', 'NPCs', 'Both' },
+		Tooltip = 'Which entities to target.'
+	})
+	Priority = AimAssist:CreateDropdown({
+		Name = 'Target Priority',
+		List = { 'Closest to Crosshair', 'Closest to Player', 'Lowest Health' },
+		Tooltip = 'How the target is picked.'
+	})
+	VerticalAim = AimAssist:CreateToggle({
+		Name = 'Vertical Aim',
+		Default = true,
+		Tooltip = 'Also moves your camera up and down.'
+	})
+	IgnoreWalls = AimAssist:CreateToggle({
+		Name = 'Ignore Behind Walls',
+		Default = true,
+		Tooltip = 'Skips targets that are behind walls.'
+	})
+	AimSpeed = AimAssist:CreateSlider({
+		Name = 'Aim Speed',
+		Min = 1,
+		Max = 100,
+		Default = 60,
+		Suffix = '%',
+		Tooltip = 'How fast the camera moves onto the target.'
 	})
 	Smoothness = AimAssist:CreateSlider({
 		Name = 'Smoothness',
@@ -1307,23 +1366,21 @@ run(function()
 		Suffix = 'x',
 		Tooltip = 'Higher values move slower and look more legit.'
 	})
-	WallCheck = AimAssist:CreateToggle({
-		Name = 'Wall Check',
-		Default = true,
-		Tooltip = 'Ignores targets that are behind walls.'
+	Shake = AimAssist:CreateSlider({
+		Name = 'Shake',
+		Min = 0,
+		Max = 10,
+		Default = 0,
+		Decimal = 1,
+		Tooltip = 'Adds camera shake while aiming.'
 	})
-	ShowFov = AimAssist:CreateToggle({
-		Name = 'Show FOV',
-		Default = true,
-		Tooltip = 'Draws a circle showing the aim range.'
+	Prediction = AimAssist:CreateSlider({
+		Name = 'Prediction',
+		Min = 0,
+		Max = 100,
+		Default = 35,
+		Suffix = '%',
+		Tooltip = 'Leads the target based on their velocity and your ping.'
 	})
-	HoldKey = AimAssist:CreateBind({
-		Name = 'Hold Key',
-		Hold = true,
-		Tooltip = 'Only aims while this key is held. Leave unbound to always aim.'
-	})
-
-	HoldKey.Triggered:Connect(function(isDown)
-		holding = isDown
-	end)
 end)
+
