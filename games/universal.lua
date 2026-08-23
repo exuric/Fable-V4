@@ -1204,3 +1204,126 @@ run(function()
 		end
 	end)
 end)
+
+run(function()
+	local hasMouseMove = mousemoverel ~= nil
+	local mousemoverel = mousemoverel or function(dx, dy)
+		local input = getrenv and getrenv().input
+		return input and input.MouseMove and input.MouseMove(dx, dy) or false
+	end
+
+	local AimPart, Fov, Smoothness, ShowFov, WallCheck, HoldKey
+	local holding = false
+
+	local circle
+	if Drawing then
+		circle = Drawing.new('Circle')
+		circle.Thickness = 1.5
+		circle.NumSides = 64
+		circle.Filled = false
+		circle.Color = Color3.fromRGB(255, 255, 255)
+		circle.Visible = false
+	end
+	fable:Clean(function()
+		if circle then
+			circle:Remove()
+		end
+	end)
+
+	local function getTargetPosition(mousepos)
+		local bestpos, bestdist
+		for _, entity in entitylib.List do
+			if entity.Targetable and entitylib.isVulnerable(entity) then
+				local part = entity[AimPart.Value]
+				if part then
+					local position, visible = gameCamera:WorldToViewportPoint(part.Position)
+					if visible then
+						local dist = (Vector2.new(position.X, position.Y) - mousepos).Magnitude
+						if dist <= Fov.Value and dist < (bestdist or math.huge) then
+							if not WallCheck.Enabled or not entitylib.Wallcheck(gameCamera.CFrame.Position, part.Position) then
+								bestpos, bestdist = Vector2.new(position.X, position.Y), dist
+							end
+						end
+					end
+				end
+			end
+		end
+
+		return bestpos
+	end
+
+	local function onStep()
+		local mousepos = inputService:GetMouseLocation() - guiService:GetGuiInset()
+
+		if circle then
+			circle.Position = inputService:GetMouseLocation()
+			circle.Radius = Fov.Value
+			circle.Visible = ShowFov.Enabled and not fable.gui.ScaledGui.ClickGui.Visible
+		end
+
+		if not entitylib.isAlive then return end
+		local targetpos = getTargetPosition(mousepos)
+		if not targetpos then return end
+		if #HoldKey.Keys > 0 and not holding then return end
+
+		local smoothness = Smoothness.Value
+		mousemoverel((targetpos.X - mousepos.X) / smoothness, (targetpos.Y - mousepos.Y) / smoothness)
+	end
+
+	local AimAssist = fable.Categories.Combat:CreateModule({
+		Name = 'Aim Assist',
+		Tooltip = 'Smoothly moves your crosshair towards the closest target.',
+		Function = function(callback)
+			if callback then
+				if not hasMouseMove then
+					notif('Aim Assist', 'Your executor does not support mouse movement!', 5, 'warning')
+				end
+				table.insert(AimAssist.Connections, runService.RenderStepped:Connect(onStep))
+			elseif circle then
+				circle.Visible = false
+			end
+		end
+	})
+
+	AimPart = AimAssist:CreateDropdown({
+		Name = 'Target Part',
+		List = { 'Head', 'HumanoidRootPart' },
+		Default = 'Head',
+		Tooltip = 'Which body part to aim towards.'
+	})
+	Fov = AimAssist:CreateSlider({
+		Name = 'FOV',
+		Min = 10,
+		Max = 500,
+		Default = 120,
+		Suffix = 'px',
+		Tooltip = 'How far from your crosshair targets are detected.'
+	})
+	Smoothness = AimAssist:CreateSlider({
+		Name = 'Smoothness',
+		Min = 1,
+		Max = 20,
+		Default = 4,
+		Suffix = 'x',
+		Tooltip = 'Higher values move slower and look more legit.'
+	})
+	WallCheck = AimAssist:CreateToggle({
+		Name = 'Wall Check',
+		Default = true,
+		Tooltip = 'Ignores targets that are behind walls.'
+	})
+	ShowFov = AimAssist:CreateToggle({
+		Name = 'Show FOV',
+		Default = true,
+		Tooltip = 'Draws a circle showing the aim range.'
+	})
+	HoldKey = AimAssist:CreateBind({
+		Name = 'Hold Key',
+		Hold = true,
+		Tooltip = 'Only aims while this key is held. Leave unbound to always aim.'
+	})
+
+	HoldKey.Triggered:Connect(function(isDown)
+		holding = isDown
+	end)
+end)
