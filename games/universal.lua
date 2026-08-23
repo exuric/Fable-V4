@@ -935,3 +935,272 @@ run(function()
 	end)
 end)
 entitylib.start()
+
+run(function()
+	local HitSounds
+	local Volume
+	local Pitch
+	local Range
+	local cache = {}
+
+	local sounds = {
+		['Electronic Ping'] = 'rbxasset://sounds/electronicpingshort.wav',
+		Snap = 'rbxasset://sounds/snap.mp3',
+		Splash = 'rbxasset://sounds/impact_water.mp3',
+		Oof = 'rbxasset://sounds/uuhhh.mp3'
+	}
+
+	local sound = Instance.new('Sound')
+	sound.Name = 'FableHitSound'
+	sound.SoundId = sounds['Electronic Ping']
+	sound.Volume = 0.6
+	sound.Parent = game:GetService('SoundService')
+
+	HitSounds = fable.Combat:CreateModule({
+		Name = 'Hit Sounds',
+		Tooltip = 'Plays a sound when a nearby player takes damage.',
+		Function = function() end
+	})
+	HitSounds:CreateDropdown({
+		Name = 'Sound',
+		List = { 'Electronic Ping', 'Snap', 'Splash', 'Oof' },
+		Default = 'Electronic Ping',
+		Tooltip = 'Which hit sound to play.',
+		Function = function(val)
+			sound.SoundId = sounds[val] or sound.SoundId
+		end
+	})
+	Volume = HitSounds:CreateSlider({
+		Name = 'Volume',
+		Min = 0,
+		Max = 100,
+		Default = 60,
+		Tooltip = 'Loudness of the hit sound.'
+	})
+	Pitch = HitSounds:CreateSlider({
+		Name = 'Pitch',
+		Min = 50,
+		Max = 200,
+		Default = 100,
+		Tooltip = 'Playback pitch in percent.'
+	})
+	Range = HitSounds:CreateSlider({
+		Name = 'Range',
+		Min = 10,
+		Max = 250,
+		Default = 75,
+		Tooltip = 'Max distance to hear hits from.'
+	})
+
+	task.spawn(function()
+		while fable.Loaded do
+			local myhrp = lplr.Character and lplr.Character:FindFirstChild('HumanoidRootPart')
+			for _, plr in playersService:GetPlayers() do
+				if plr ~= lplr then
+					local char = plr.Character
+					local hum = char and char:FindFirstChildOfClass('Humanoid')
+					local hrp = char and char:FindFirstChild('HumanoidRootPart')
+					if hum and hrp then
+						local old = cache[plr]
+						cache[plr] = hum.Health
+						if old and hum.Health < old and HitSounds.Enabled and myhrp and (myhrp.Position - hrp.Position).Magnitude <= Range.Value then
+							sound.Volume = Volume.Value / 100
+							sound.PlaybackSpeed = Pitch.Value / 100
+							sound:Play()
+						end
+					elseif cache[plr] then
+						cache[plr] = nil
+					end
+				end
+			end
+			task.wait(0.1)
+		end
+	end)
+end)
+
+run(function()
+	local uipallet = fable.Libraries.uipallet
+	local color = fable.Libraries.color
+
+	local ShowTime
+	local MaxEntries
+	local entries = {}
+	local cache = {}
+	local lastdamage = {}
+	local watching = {}
+
+	local holder = Instance.new('Frame')
+	holder.Name = 'FableKillLog'
+	holder.BackgroundColor3 = color.Dark(uipallet.Main, 0.02)
+	holder.BackgroundTransparency = 0.05
+	holder.BorderSizePixel = 0
+	holder.Position = UDim2.fromOffset(12, 60)
+	holder.Size = UDim2.fromOffset(240, 0)
+	holder.AutomaticSize = Enum.AutomaticSize.Y
+	holder.Visible = false
+	holder.Parent = fable.gui
+	fable:Clean(holder)
+
+	local corner = Instance.new('UICorner')
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = holder
+
+	local title = Instance.new('TextLabel')
+	title.BackgroundTransparency = 1
+	title.FontFace = uipallet.FontSemiBold
+	title.Size = UDim2.new(1, -16, 0, 24)
+	title.Position = UDim2.fromOffset(8, 0)
+	title.Text = 'KILL LOG'
+	title.TextColor3 = color.Light(uipallet.Text, 0.2)
+	title.TextSize = 12
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = holder
+
+	local layout = Instance.new('UIListLayout')
+	layout.Padding = UDim.new(0, 2)
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Parent = holder
+
+	local pad = Instance.new('UIPadding')
+	pad.PaddingBottom = UDim.new(0, 6)
+	pad.PaddingLeft = UDim.new(0, 8)
+	pad.PaddingRight = UDim.new(0, 8)
+	pad.PaddingTop = UDim.new(0, 26)
+	pad.Parent = holder
+
+	local function rebuild()
+		for _, v in holder:GetChildren() do
+			if v.Name == 'Entry' then
+				v:Destroy()
+			end
+		end
+		local total = #entries
+		for i = total, 1, -1 do
+			local entry = entries[i]
+			local label = Instance.new('TextLabel')
+			label.Name = 'Entry'
+			label.LayoutOrder = total - i + 1
+			label.BackgroundTransparency = 1
+			label.RichText = true
+			label.FontFace = uipallet.Font
+			label.TextSize = 13
+			label.TextXAlignment = Enum.TextXAlignment.Left
+			label.TextWrapped = true
+			label.AutomaticSize = Enum.AutomaticSize.Y
+			label.Size = UDim2.new(1, 0, 0, 0)
+			label.TextColor3 = uipallet.Text
+			label.Text = '<font color="#'..entry[2]..'">'..entry[1]..'</font>'
+			label.Parent = holder
+		end
+	end
+
+	local function addEntry(hex, msg)
+		table.insert(entries, {(ShowTime.Enabled and os.date('[%H:%M:%S] ') or '')..msg, hex})
+		while #entries > MaxEntries.Value do
+			table.remove(entries, 1)
+		end
+		rebuild()
+	end
+
+	local KillLog = fable.Combat:CreateModule({
+		Name = 'Kill Log',
+		Tooltip = 'Logs knockouts and deaths of nearby players.',
+		Function = function(callback)
+			holder.Visible = callback
+		end
+	})
+	ShowTime = KillLog:CreateToggle({
+		Name = 'Show Time',
+		Default = true,
+		Tooltip = 'Adds a timestamp to entries.',
+		Function = function()
+			rebuild()
+		end
+	})
+	MaxEntries = KillLog:CreateSlider({
+		Name = 'Max Entries',
+		Min = 5,
+		Max = 20,
+		Default = 8,
+		Tooltip = 'How many entries to keep.',
+		Function = function()
+			rebuild()
+		end
+	})
+
+	local function onDowned(plr)
+		if os.clock() - (lastdamage[plr] or 0) < 4 then
+			addEntry('9dff9d', 'You knocked '..removeTags(plr.DisplayName))
+		else
+			addEntry('c9c9c9', removeTags(plr.DisplayName)..' got knocked')
+		end
+	end
+
+	local function onDeath(plr)
+		if os.clock() - (lastdamage[plr] or 0) < 4 then
+			addEntry('9dff9d', 'You killed '..removeTags(plr.DisplayName))
+		else
+			addEntry('ff8080', removeTags(plr.DisplayName)..' died')
+		end
+	end
+
+	local function watch(plr)
+		if plr == lplr or watching[plr] then return end
+		watching[plr] = true
+		local function bind(char)
+			task.spawn(function()
+				local hum = char:WaitForChild('Humanoid', 10)
+				local effects = char:FindFirstChild('BodyEffects') or char:WaitForChild('BodyEffects', 10)
+				local ko = effects and (effects:FindFirstChild('K.O') or effects:FindFirstChild('KO'))
+				if ko and ko:IsA('BoolValue') then
+					fable:Clean(ko:GetPropertyChangedSignal('Value'):Connect(function()
+						if ko.Value and KillLog.Enabled then
+							onDowned(plr)
+						end
+					end))
+				end
+				if hum then
+					fable:Clean(hum.Died:Connect(function()
+						if KillLog.Enabled then
+							onDeath(plr)
+						end
+					end))
+				end
+			end)
+		end
+		if plr.Character then
+			bind(plr.Character)
+		end
+		fable:Clean(plr.CharacterAdded:Connect(bind))
+	end
+
+	for _, plr in playersService:GetPlayers() do
+		watch(plr)
+	end
+	fable:Clean(playersService.PlayerAdded:Connect(watch))
+	fable:Clean(playersService.PlayerRemoving:Connect(function(plr)
+		watching[plr] = nil
+		cache[plr] = nil
+		lastdamage[plr] = nil
+	end))
+
+	task.spawn(function()
+		while fable.Loaded do
+			for _, plr in playersService:GetPlayers() do
+				if plr ~= lplr then
+					local hum = plr.Character and plr.Character:FindFirstChildOfClass('Humanoid')
+					if hum then
+						local old = cache[plr]
+						cache[plr] = hum.Health
+						if old and hum.Health < old then
+							lastdamage[plr] = os.clock()
+						end
+					elseif cache[plr] then
+						cache[plr] = nil
+					end
+				end
+			end
+			task.wait(0.15)
+		end
+	end)
+end)
