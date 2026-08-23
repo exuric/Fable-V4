@@ -1215,12 +1215,14 @@ run(function()
 	local Distance
 	local Angle
 
-	local acos, clamp, deg = math.acos, math.clamp, math.deg
+	local acos, asin, atan2, clamp, deg, rad, min = math.acos, math.asin, math.atan2, math.clamp, math.deg, math.rad, math.min
 	local Vector2new, Vector3new = Vector2.new, Vector3.new
+	local TAU = math.pi * 2
 
 	local BIND_NAME = 'FableAimAssistV2'
 	local PART_PRIORITY = { 'Head', 'UpperTorso', 'Torso', 'HumanoidRootPart' }
 	local lasttarget, started = nil, 0
+	local curYaw, curPitch = nil, nil
 
 	local function smoothstep(t)
 		t = clamp(t, 0, 1)
@@ -1231,7 +1233,14 @@ run(function()
 		return t < 0.5 and 4 * t * t * t or 1 - (-2 * t + 2) ^ 3 / 2
 	end
 
+	local function dropAimState()
+		curYaw, curPitch = nil, nil
+		lasttarget = nil
+	end
+
 	local function getTarget()
+		local prev = lasttarget
+
 		local ent = entitylib.EntityPosition({
 			Range = Distance.Value,
 			Part = 'HumanoidRootPart',
@@ -1244,12 +1253,12 @@ run(function()
 			end
 		})
 
-		if ent ~= lasttarget then
+		if ent ~= prev then
 			started = tick()
 			lasttarget = ent
 		end
 
-		return ent
+		return ent, prev
 	end
 
 	local function getLead(target, camPos)
@@ -1290,43 +1299,57 @@ run(function()
 	local function onStep(dt)
 		local cam = workspace.CurrentCamera
 		if not cam or not cam.Parent then return end
-		if not entitylib.isAlive then return end
-		if fable.gui.ScaledGui.ClickGui.Visible then return end
+		if not entitylib.isAlive then
+			dropAimState()
+			return
+		end
 
-		local camCF = cam.CFrame
-		local camPos = camCF.Position
-		local look = camCF.LookVector
+		if fable.gui.ScaledGui.ClickGui.Visible then
+			dropAimState()
+			return
+		end
 
-		local target = getTarget()
-		if not target then return end
+		local camPos = cam.CFrame.Position
 
-		local retain = target == lasttarget
-		local part = target.RootPart or target.Head
-		if not part or not part.Parent then return end
+		local target, prev = getTarget()
+		if not target then
+			dropAimState()
+			return
+		end
 
-		local toTarget = part.Position - camPos
-		if toTarget.Magnitude < 0.05 then return end
-
-		local errDeg = deg(acos(clamp(look:Dot(toTarget.Unit), -1, 1)))
-		local cone = Angle.Value
-
-		if errDeg > cone / 2 and not (retain and errDeg <= cone * 0.75) then
+		local retain = target == prev
+		local anchor = target.RootPart or target.Head
+		if not anchor or not anchor.Parent then
+			dropAimState()
 			return
 		end
 
 		local aimPos = pickAimPosition(target, camPos)
-		if not aimPos then return end
+		if not aimPos then
+			dropAimState()
+			return
+		end
 
 		aimPos += getLead(target, camPos)
+
+		if not curYaw then
+			curPitch, curYaw = cam.CFrame:ToOrientation()
+		end
 
 		local dir = aimPos - camPos
 		if dir.Magnitude < 0.05 then return end
 
-		local aimErrDeg = deg(acos(clamp(look:Dot(dir.Unit), -1, 1)))
+		local dYaw = (atan2(-dir.X, -dir.Z) - curYaw + math.pi) % TAU - math.pi
+		local dPitch = (asin(clamp(dir.Y / dir.Magnitude, -1, 1)) - curPitch + math.pi) % TAU - math.pi
+		local aimErrDeg = deg((dYaw * dYaw + dPitch * dPitch) ^ 0.5)
+
+		local cone = Angle.Value
+		if aimErrDeg > cone / 2 and not (retain and aimErrDeg <= cone * 0.75) then
+			dropAimState()
+			return
+		end
 
 		targetinfo.Targets[target] = tick() + 1
-
-		if aimErrDeg < 0.08 then return end
 
 		local amount = clamp(Smoothing.Value, 0, 10)
 		local base = (10.5 - amount) * 0.35
@@ -1357,7 +1380,10 @@ run(function()
 			alpha = min(alpha, maxStepDeg / aimErrDeg)
 		end
 
-		cam.CFrame = camCF:Lerp(CFrame.lookAt(camPos, aimPos), clamp(alpha, 0, 1))
+		curYaw = curYaw + dYaw * alpha
+		curPitch = clamp(curPitch + dPitch * alpha, rad(-80), rad(80))
+
+		cam.CFrame = CFrame.new(camPos) * CFrame.fromOrientation(curPitch, curYaw, 0)
 	end
 
 	AimAssist = fable.Categories.Combat:CreateModule({
@@ -1373,7 +1399,7 @@ run(function()
 				pcall(function()
 					runService:UnbindFromRenderStep(BIND_NAME)
 				end)
-				lasttarget = nil
+				dropAimState()
 			end
 		end
 	})
