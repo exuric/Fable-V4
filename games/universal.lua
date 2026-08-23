@@ -1214,19 +1214,33 @@ run(function()
 	local Dynamic
 	local Distance
 	local Angle
-	local lasttarget
-	local started = 0
+
+	local acos, clamp, deg = math.acos, math.clamp, math.deg
+	local Vector2new, Vector3new = Vector2.new, Vector3.new
+
+	local BIND_NAME = 'FableAimAssistV2'
+	local PART_PRIORITY = { 'Head', 'UpperTorso', 'Torso', 'HumanoidRootPart' }
+	local lasttarget, started = nil, 0
+
+	local function smoothstep(t)
+		t = clamp(t, 0, 1)
+		return t * t * (3 - 2 * t)
+	end
+
+	local function easeInOut(t)
+		return t < 0.5 and 4 * t * t * t or 1 - (-2 * t + 2) ^ 3 / 2
+	end
 
 	local function getTarget()
 		local ent = entitylib.EntityPosition({
 			Range = Distance.Value,
-			Part = 'RootPart',
+			Part = 'HumanoidRootPart',
 			Wallcheck = true,
 			Sort = function(a, b)
 				local center = gameCamera.ViewportSize / 2
 				local posa = gameCamera:WorldToViewportPoint(a.Entity.RootPart.Position)
 				local posb = gameCamera:WorldToViewportPoint(b.Entity.RootPart.Position)
-				return (Vector2.new(posa.X, posa.Y) - center).Magnitude < (Vector2.new(posb.X, posb.Y) - center).Magnitude
+				return (Vector2new(posa.X, posa.Y) - center).Magnitude < (Vector2new(posb.X, posb.Y) - center).Magnitude
 			end
 		})
 
@@ -1238,65 +1252,112 @@ run(function()
 		return ent
 	end
 
-	local function smoothstep(t)
-		t = math.clamp(t, 0, 1)
-		return t * t * (3 - 2 * t)
+	local function getLead(target, camPos)
+		local ok, vel = pcall(function()
+			return target.RootPart.AssemblyLinearVelocity
+		end)
+
+		if not ok or typeof(vel) ~= 'Vector3' or vel.Magnitude < 0.5 then
+			return Vector3.zero
+		end
+
+		local dist = (target.RootPart.Position - camPos).Magnitude
+		local leadTime = clamp(0.06 + dist / 900, 0.06, 0.22)
+		return Vector3new(vel.X, vel.Y * 0.35, vel.Z) * leadTime
 	end
 
-	local function easeInOut(t)
-		return t < 0.5 and 4 * t * t * t or 1 - math.pow(-2 * t + 2, 3) / 2
+	local function pickAimPosition(target, camPos)
+		local char = target.Character
+
+		for i, name in ipairs(PART_PRIORITY) do
+			local part = char and char:FindFirstChild(name)
+
+			if part and part:IsA('BasePart') then
+				local pos = part.Position
+
+				if not entitylib.Wallcheck(camPos, pos) then
+					return pos
+				end
+
+				if i >= 3 then break end
+			end
+		end
+
+		local fallback = target.RootPart or target.HumanoidRootPart
+		return fallback and fallback.Position or nil
 	end
 
-	local function getAlpha(dt, errDeg)
-		local amount = math.clamp(Smoothing.Value, 0, 10)
+	local function onStep(dt)
+		local cam = workspace.CurrentCamera
+		if not cam or not cam.Parent then return end
+		if not entitylib.isAlive then return end
+		if fable.gui.ScaledGui.ClickGui.Visible then return end
+
+		local camCF = cam.CFrame
+		local camPos = camCF.Position
+		local look = camCF.LookVector
+
+		local target = getTarget()
+		if not target then return end
+
+		local retain = target == lasttarget
+		local part = target.RootPart or target.Head
+		if not part or not part.Parent then return end
+
+		local toTarget = part.Position - camPos
+		if toTarget.Magnitude < 0.05 then return end
+
+		local errDeg = deg(acos(clamp(look:Dot(toTarget.Unit), -1, 1)))
+		local cone = Angle.Value
+
+		if errDeg > cone / 2 and not (retain and errDeg <= cone * 0.75) then
+			return
+		end
+
+		local aimPos = pickAimPosition(target, camPos)
+		if not aimPos then return end
+
+		aimPos += getLead(target, camPos)
+
+		local dir = aimPos - camPos
+		if dir.Magnitude < 0.05 then return end
+
+		local aimErrDeg = deg(acos(clamp(look:Dot(dir.Unit), -1, 1)))
+
+		targetinfo.Targets[target] = tick() + 1
+
+		if aimErrDeg < 0.08 then return end
+
+		local amount = clamp(Smoothing.Value, 0, 10)
 		local base = (10.5 - amount) * 0.35
 		local style = Style.Value
 		local alpha
 
 		if style == 'Linear' then
-			alpha = math.clamp(base * dt, 0, 1)
+			alpha = clamp(base * dt, 0, 1)
 		elseif style == 'Exponential' then
-			local closeness = 1 - math.clamp(errDeg / 60, 0, 1)
-			alpha = math.clamp(base * (0.3 + 2.2 * closeness) * dt, 0, 1)
+			local closeness = 1 - clamp(aimErrDeg / 60, 0, 1)
+			alpha = clamp(base * (0.3 + 2.2 * closeness) * dt, 0, 1)
 		elseif style == 'Bezier Curve' then
 			alpha = smoothstep(base * 2.5 * dt)
 		else
-			local dyn = math.clamp(Dynamic.Value, 0, 10) / 10
-			local farFactor = math.clamp(errDeg / 45, 0, 1)
-			alpha = math.clamp(base * (1 - dyn * 0.75 * farFactor + dyn * 0.35 * (1 - farFactor)) * dt, 0, 1)
+			local dyn = clamp(Dynamic.Value, 0, 10) / 10
+			local farFactor = clamp(aimErrDeg / 45, 0, 1)
+			alpha = clamp(base * (1 - dyn * 0.75 * farFactor + dyn * 0.35 * (1 - farFactor)) * dt, 0, 1)
 		end
 
 		if Mode.Value == 'Adaptive' then
-			local prog = math.min(tick() - started, 1)
-			local errBoost = 0.4 + 1.2 * math.clamp(errDeg / 30, 0, 1)
-			alpha = math.clamp(alpha * (0.45 + 0.55 * easeInOut(prog)) * errBoost, 0, 1)
+			local prog = min(tick() - started, 1)
+			local errBoost = 0.4 + 1.2 * clamp(aimErrDeg / 30, 0, 1)
+			alpha = alpha * (0.45 + 0.55 * easeInOut(prog)) * errBoost
 		end
 
-		return alpha
-	end
+		local maxStepDeg = (90 + (10 - amount) * 40) * dt
+		if aimErrDeg > 0.001 then
+			alpha = min(alpha, maxStepDeg / aimErrDeg)
+		end
 
-	local function onStep(dt)
-		if not entitylib.isAlive then return end
-		if fable.gui.ScaledGui.ClickGui.Visible then return end
-
-		local target = getTarget()
-		if not target then return end
-
-		local part = target.Head or target.RootPart
-		if not part then return end
-
-		local camCF = gameCamera.CFrame
-		local aimPosition = part.Position
-		local dir = aimPosition - camCF.Position
-		if dir.Magnitude < 0.05 then return end
-
-		local errDeg = math.deg(math.acos(math.clamp(camCF.LookVector.Unit:Dot(dir.Unit), -1, 1)))
-		if errDeg >= Angle.Value / 2 then return end
-
-		targetinfo.Targets[target] = tick() + 1
-
-		local goal = CFrame.lookAt(camCF.Position, aimPosition)
-		gameCamera.CFrame = camCF:Lerp(goal, getAlpha(dt, errDeg))
+		cam.CFrame = camCF:Lerp(CFrame.lookAt(camPos, aimPos), clamp(alpha, 0, 1))
 	end
 
 	AimAssist = fable.Categories.Combat:CreateModule({
@@ -1305,12 +1366,12 @@ run(function()
 		Function = function(callback)
 			if callback then
 				pcall(function()
-					runService:UnbindFromRenderStep('FableAimAssist')
+					runService:UnbindFromRenderStep(BIND_NAME)
 				end)
-				runService:BindToRenderStep('FableAimAssist', Enum.RenderPriority.Camera.Value + 1, onStep)
+				runService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, onStep)
 			else
 				pcall(function()
-					runService:UnbindFromRenderStep('FableAimAssist')
+					runService:UnbindFromRenderStep(BIND_NAME)
 				end)
 				lasttarget = nil
 			end
@@ -1319,7 +1380,7 @@ run(function()
 
 	fable:Clean(function()
 		pcall(function()
-			runService:UnbindFromRenderStep('FableAimAssist')
+			runService:UnbindFromRenderStep(BIND_NAME)
 		end)
 	end)
 
@@ -1365,6 +1426,6 @@ run(function()
 		Max = 360,
 		Default = 70,
 		Suffix = 'deg',
-		Tooltip = 'Only locks on to targets inside this view cone.'
+		Tooltip = 'Only locks on to targets inside this view cone.\nKeeps the current target out to 1.5x before dropping it.'
 	})
 end)
