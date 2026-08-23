@@ -1208,412 +1208,163 @@ end)
 
 run(function()
 	local AimAssist
-	local Perspective
 	local Mode
-	local Targets
-	local Sort
-	local AimPart
-	local AimSpeed
-	local Prediction
-	local Shake
-	local Smoothness
-	local Overshoot
-	local Reaction
-	local MaxTurn
-	local Humanize
-	local VerticalAim
+	local Style
+	local Smoothing
+	local Dynamic
 	local Distance
-	local AngleSlider
-	local StrafeIncrease
-	local MouseDown
+	local Angle
+	local lasttarget
+	local started = 0
 
-	local function ease(t)
-		return t < 0.5 and 4 * t * t * t or 1 - math.pow(-2 * t + 2, 3) / 2
-	end
-
-	local sortmethods = {
-		Mouse = function(a, b)
-			local origin = inputService:GetMouseLocation()
-			local posa, visa = gameCamera:WorldToViewportPoint(a.Entity.RootPart.Position)
-			local posb, visb = gameCamera:WorldToViewportPoint(b.Entity.RootPart.Position)
-			local dista = visa and (Vector2.new(posa.X, posa.Y) - origin).Magnitude or math.huge
-			local distb = visb and (Vector2.new(posb.X, posb.Y) - origin).Magnitude or math.huge
-			return dista < distb
-		end,
-		Angle = function(a, b)
-			local selfrootpos = entitylib.character.RootPart.Position
-			local localfacing = entitylib.character.RootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
-			local direction = (a.Entity.RootPart.Position - selfrootpos) * Vector3.new(1, 0, 1)
-			local direction2 = (b.Entity.RootPart.Position - selfrootpos) * Vector3.new(1, 0, 1)
-			local angle = direction.Magnitude > 0 and math.acos(math.clamp(localfacing:Dot(direction.Unit), -1, 1)) or 0
-			local angle2 = direction2.Magnitude > 0 and math.acos(math.clamp(localfacing:Dot(direction2.Unit), -1, 1)) or 0
-			return angle < angle2
-		end,
-		Distance = function(a, b)
-			return a.Magnitude < b.Magnitude
-		end,
-		Health = function(a, b)
-			return a.Entity.Health < b.Entity.Health
-		end
-	}
-
-	local cache = setmetatable({}, { __mode = 'k' })
-	local function getMousePosition()
-		if inputService.TouchEnabled then
-			return gameCamera.ViewportSize / 2
-		end
-		return inputService.GetMouseLocation(inputService)
-	end
-
-	local function getLead(ent)
-		local ok, vel = pcall(function()
-			return ent.RootPart.AssemblyLinearVelocity
-		end)
-		vel = (ok and typeof(vel) == 'Vector3') and vel or Vector3.zero
-		if vel.Magnitude < 0.5 then
-			return Vector3.zero
-		end
-
-		local ping = 0
-		pcall(function()
-			ping = lplr:GetNetworkPing()
-		end)
-
-		return Vector3.new(vel.X, vel.Y * 0.5, vel.Z) * ((Prediction.Value / 100) * (0.12 + math.clamp(ping, 0, 0.4)))
-	end
-
-	local function getAim(ent)
-		local lead = getLead(ent)
-		if AimPart.Value == 'Closest' then
-			if not cache[ent.Character] then
-				cache[ent.Character] = ent.Character:GetChildren()
-			end
-			local localPosition, magnitude, part = getMousePosition(), 9e9, nil
-			for _, v in cache[ent.Character] do
-				if v and v.Parent and v:IsA('BasePart') then
-					local position, vis = gameCamera.WorldToViewportPoint(gameCamera, v.Position)
-
-					if vis then
-						local mag = (localPosition - Vector2.new(position.x, position.y)).Magnitude
-
-						if mag < magnitude then
-							magnitude = mag
-							part = v
-						end
-					end
-				end
-			end
-			if part then
-				return part.Position + lead
-			end
-		end
-		return ent.RootPart.Position + lead
-	end
-
-	local started, lasttarget, nextsearch = 0, nil, 0
-	local humanState = {
-		lastEnt = nil,
-		prevAim = nil,
-		prevTime = 0,
-		bias = Vector3.new(0, 0, 0),
-		reactUntil = 0
-	}
-
-	local function getSmoothPoint(ent, rawAim, dt)
-		if humanState.lastEnt ~= ent then
-			humanState.lastEnt = ent
-			humanState.prevAim = rawAim
-			humanState.prevTime = tick()
-			humanState.bias = Vector3.new(0, 0, 0)
-		end
-		if Humanize.Value == 'Advanced' and Overshoot.Value > 0 then
-			local prev = humanState.prevAim or rawAim
-			local deltaT = math.min(tick() - humanState.prevTime, 0.25)
-			local vel = deltaT > 0 and (rawAim - prev) / deltaT or Vector3.new(0, 0, 0)
-			if vel.Magnitude > 60 then
-				vel = vel.Unit * 60
-			end
-			humanState.bias = humanState.bias * math.exp(-dt * 3) + vel * (Overshoot.Value / 100) * 0.25 * dt
-			humanState.prevAim = rawAim
-			humanState.prevTime = tick()
-		end
-		return rawAim + humanState.bias
-	end
-
-	local function smoothedLook(localcframe, targetPoint, dt, factor)
-		if not VerticalAim.Enabled then
-			targetPoint = Vector3.new(targetPoint.X, localcframe.Position.Y, targetPoint.Z)
-		end
-		local forward = localcframe.LookVector
-		local want = (targetPoint - localcframe.Position)
-		if want.Magnitude < 1e-4 then
-			return localcframe
-		end
-		want = want.Unit
-		local ang = math.acos(math.clamp(forward:Dot(want), -1, 1))
-		if ang < math.rad(0.02) then
-			return localcframe
-		end
-		local direction = want
-		if Humanize.Value == 'Advanced' and MaxTurn.Value > 0 then
-			local maxStep = math.rad(MaxTurn.Value) * dt
-			if ang > maxStep then
-				direction = (forward + (want - forward) * (maxStep / ang)).Unit
-			end
-		end
-		local remaining = math.acos(math.clamp(forward.Unit:Dot(direction.Unit), -1, 1))
-		local easef = math.clamp(remaining / math.rad(AngleSlider.Value), 0, 1)
-		local alpha = math.clamp(1 - math.exp(-factor * dt * (0.25 + 0.75 * easef)), 0, 1)
-		return localcframe:Lerp(CFrame.lookAt(localcframe.Position, localcframe.Position + direction * 100), alpha)
-	end
-
-	local function applyHumanAim(localcframe, ent, aimPoint, dt, speed)
-		if tick() < humanState.reactUntil then
-			return localcframe
-		end
-		local factor = math.max(speed, 0.01) * 8 * (Smoothness.Value / 100)
-		return smoothedLook(localcframe, getSmoothPoint(ent, aimPoint, dt), dt, factor)
-	end
-
-	local aimfuncs = {
-		Simple = function(localcframe, ent, fps)
-			local rng = Random.new()
-			local speed = (AimSpeed.Value + (StrafeIncrease.Enabled and (inputService:IsKeyDown(Enum.KeyCode.A) or inputService:IsKeyDown(Enum.KeyCode.D)) and 10 or 0))
-			local jitter = Vector3.new((rng:NextNumber() - 0.5) * Shake.Value * fps, (rng:NextNumber() - 0.5) * Shake.Value * fps, (rng:NextNumber() - 0.5) * Shake.Value * fps)
-			return applyHumanAim(localcframe, ent, getAim(ent) + jitter, fps, speed), speed
-		end,
-		Adaptive = function(localcframe, ent, fps)
-			local prog, rng = ease(math.min(tick() - started, 1)), Random.new()
-			local speed = (AimSpeed.Value * 0.1 * prog) + (1 - prog) + (StrafeIncrease.Enabled and (inputService:IsKeyDown(Enum.KeyCode.A) or inputService:IsKeyDown(Enum.KeyCode.D)) and 10 or 5)
-			local jitter = Vector3.new((rng:NextNumber() - 0.5) * Shake.Value * fps, (rng:NextNumber() - 0.5) * Shake.Value * fps, (rng:NextNumber() - 0.5) * Shake.Value * fps)
-			return applyHumanAim(localcframe, ent, getAim(ent) + jitter, fps, speed), speed
-		end
-	}
-
-	local function isValid(ent)
-		if not entitylib.isAlive then return false end
-		if not ent or not ent.Character or not ent.Character.Parent then return false end
-		if not ent.RootPart or not ent.RootPart.Parent then return false end
-		if not ent.Targetable or not entitylib.isVulnerable(ent) then return false end
-
-		local localPosition = entitylib.character.RootPart.Position
-		if (localPosition - ent.RootPart.Position).Magnitude > Distance.Value then
-			return false
-		end
-		if Targets.Walls.Enabled and entitylib.Wallcheck(localPosition, ent.RootPart.Position, Targets.Walls.Enabled) then
-			return false
-		end
-		return true
-	end
-
-	local function getTargetData()
-		if MouseDown.Enabled and not inputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-			return nil
-		end
-
-		if isValid(lasttarget) and tick() < nextsearch then
-			return lasttarget
-		end
-
+	local function getTarget()
 		local ent = entitylib.EntityPosition({
 			Range = Distance.Value,
 			Part = 'RootPart',
-			Wallcheck = Targets.Walls.Enabled,
-			Players = Targets.Players.Enabled,
-			NPCs = Targets.NPCs.Enabled,
-			Sort = sortmethods[Sort.Value]
+			Wallcheck = true,
+			Sort = function(a, b)
+				local center = gameCamera.ViewportSize / 2
+				local posa = gameCamera:WorldToViewportPoint(a.Entity.RootPart.Position)
+				local posb = gameCamera:WorldToViewportPoint(b.Entity.RootPart.Position)
+				return (Vector2.new(posa.X, posa.Y) - center).Magnitude < (Vector2.new(posb.X, posb.Y) - center).Magnitude
+			end
 		})
 
 		if ent ~= lasttarget then
 			started = tick()
-			if Humanize.Value == 'Advanced' and Reaction.Value > 0 then
-				humanState.reactUntil = tick() + (Reaction.Value / 1000) * Random.new():NextNumber(0.75, 1.25)
-			end
+			lasttarget = ent
 		end
-		lasttarget = ent
-		nextsearch = tick() + 1
+
 		return ent
+	end
+
+	local function smoothstep(t)
+		t = math.clamp(t, 0, 1)
+		return t * t * (3 - 2 * t)
+	end
+
+	local function easeInOut(t)
+		return t < 0.5 and 4 * t * t * t or 1 - math.pow(-2 * t + 2, 3) / 2
+	end
+
+	local function getAlpha(dt, errDeg)
+		local amount = math.clamp(Smoothing.Value, 0, 10)
+		local base = (10.5 - amount) * 0.35
+		local style = Style.Value
+		local alpha
+
+		if style == 'Linear' then
+			alpha = math.clamp(base * dt, 0, 1)
+		elseif style == 'Exponential' then
+			local closeness = 1 - math.clamp(errDeg / 60, 0, 1)
+			alpha = math.clamp(base * (0.3 + 2.2 * closeness) * dt, 0, 1)
+		elseif style == 'Bezier Curve' then
+			alpha = smoothstep(base * 2.5 * dt)
+		else
+			local dyn = math.clamp(Dynamic.Value, 0, 10) / 10
+			local farFactor = math.clamp(errDeg / 45, 0, 1)
+			alpha = math.clamp(base * (1 - dyn * 0.75 * farFactor + dyn * 0.35 * (1 - farFactor)) * dt, 0, 1)
+		end
+
+		if Mode.Value == 'Adaptive' then
+			local prog = math.min(tick() - started, 1)
+			local errBoost = 0.4 + 1.2 * math.clamp(errDeg / 30, 0, 1)
+			alpha = math.clamp(alpha * (0.45 + 0.55 * easeInOut(prog)) * errBoost, 0, 1)
+		end
+
+		return alpha
+	end
+
+	local function onStep(dt)
+		if not entitylib.isAlive then return end
+		if fable.gui.ScaledGui.ClickGui.Visible then return end
+
+		local target = getTarget()
+		if not target then return end
+
+		local part = target.Head or target.RootPart
+		if not part then return end
+
+		local camCF = gameCamera.CFrame
+		local aimPosition = part.Position
+		local dir = aimPosition - camCF.Position
+		if dir.Magnitude < 0.05 then return end
+
+		local errDeg = math.deg(math.acos(math.clamp(camCF.LookVector.Unit:Dot(dir.Unit), -1, 1)))
+		if errDeg >= Angle.Value / 2 then return end
+
+		targetinfo.Targets[target] = tick() + 1
+
+		local goal = CFrame.lookAt(camCF.Position, aimPosition)
+		gameCamera.CFrame = camCF:Lerp(goal, getAlpha(dt, errDeg))
 	end
 
 	AimAssist = fable.Categories.Combat:CreateModule({
 		Name = 'Aim Assist',
+		Tooltip = 'Advanced camera lock with selectable smoothing styles.',
 		Function = function(callback)
 			if callback then
-				local rotate = 0
-
-				table.insert(AimAssist.Connections, runService.PostSimulation:Connect(function(dt)
-					if entitylib.isAlive then
-						entitylib.character.Humanoid.AutoRotate = tick() > rotate
-
-						local ent = getTargetData()
-						if ent then
-							local root = entitylib.character.RootPart
-							local delta = (ent.RootPart.Position - root.Position)
-							local localfacing = root.CFrame.LookVector * Vector3.new(1, 0, 1)
-							local horizontal = delta * Vector3.new(1, 0, 1)
-							local angle = localfacing.Magnitude > 0 and horizontal.Magnitude > 0 and math.acos(math.clamp(localfacing.Unit:Dot(horizontal.Unit), -1, 1)) or 0
-							if angle >= (math.rad(AngleSlider.Value) / 2) then
-								return
-							end
-							targetinfo.Targets[ent] = tick() + 1
-
-							local firstPerson = entitylib.character.Head.LocalTransparencyModifier == 1
-							local perspective = Perspective.Value
-
-							if perspective == 'Mouse' then
-								local cframe, speed = aimfuncs[Mode.Value](gameCamera.CFrame, ent, dt)
-								local viewport = gameCamera:WorldToViewportPoint(cframe.Position)
-								local pos = (Vector2.new(viewport.X, viewport.Y) - inputService:GetMouseLocation()) * (speed / 15)
-								pcall(mousemoverel, pos.X, pos.Y)
-							elseif perspective == 'First person' or (perspective == 'Dynamic' and firstPerson) then
-								if not firstPerson then return end
-								local cframe = aimfuncs[Mode.Value](gameCamera.CFrame, ent, dt)
-								gameCamera.CFrame = cframe
-							elseif perspective == 'Third person' or (perspective == 'Dynamic' and not firstPerson) then
-								if firstPerson then return end
-								local cframe = aimfuncs[Mode.Value](root.CFrame, ent, dt)
-								local direction = cframe.LookVector * Vector3.new(1, 0, 1)
-								if direction.Magnitude > 0 then
-									entitylib.character.Humanoid.AutoRotate = false
-									root.CFrame = CFrame.lookAlong(root.Position, direction)
-									rotate = tick() + 0.1
-								end
-							end
-						end
-					else
-						lasttarget = nil
-						humanState.lastEnt = nil
-					end
-				end))
+				pcall(function()
+					runService:UnbindFromRenderStep('FableAimAssist')
+				end)
+				runService:BindToRenderStep('FableAimAssist', Enum.RenderPriority.Camera.Value + 1, onStep)
 			else
+				pcall(function()
+					runService:UnbindFromRenderStep('FableAimAssist')
+				end)
 				lasttarget = nil
-				humanState.lastEnt = nil
-				if entitylib.isAlive then
-					entitylib.character.Humanoid.AutoRotate = true
-				end
 			end
-		end,
-		Tooltip = 'Ported from Larp BedWars - smoothly aims at the closest valid target'
+		end
 	})
 
-	Perspective = AimAssist:CreateDropdown({
-		Name = 'Aim perspective',
-		List = { 'Mouse', 'First person', 'Third person', 'Dynamic' },
-		Tooltip = 'Mouse - moves your mouse & camera\nFirst person - Uses your camera to aim\nThird person - Moves your character\nDynamic - First person mode in first person, third person mode in third person'
-	})
+	fable:Clean(function()
+		pcall(function()
+			runService:UnbindFromRenderStep('FableAimAssist')
+		end)
+	end)
+
 	Mode = AimAssist:CreateDropdown({
 		Name = 'Mode',
 		List = { 'Simple', 'Adaptive' },
-		Tooltip = 'Simple - Smooth aiming\nAdaptive - Advanced tracking with adaptive behavior'
+		Tooltip = 'Simple - constant behavior\nAdaptive - adapts pull speed to the situation'
 	})
-	Targets = AimAssist:CreateTargets({
-		Players = true,
-		Walls = true
+	Style = AimAssist:CreateDropdown({
+		Name = 'Smoothing Style',
+		List = { 'Linear', 'Exponential', 'Bezier Curve', 'Dynamic' },
+		Tooltip = 'Linear - constant pull speed, predictable\nExponential - pulls faster the closer you are\nBezier Curve - smooth acceleration and deceleration, most natural\nDynamic - auto adjusts smoothing based on distance (uses Dynamic Smoothing)'
 	})
-	Sort = AimAssist:CreateDropdown({
-		Name = 'Target Priority',
-		List = { 'Mouse', 'Angle', 'Distance', 'Health' },
-		Tooltip = 'Mouse = closest to crosshair'
+	Smoothing = AimAssist:CreateSlider({
+		Name = 'Smoothing Amount',
+		Min = 0,
+		Max = 10,
+		Default = 4,
+		Decimal = 1,
+		Tooltip = 'How fast the assist pulls your aim toward the target.\nLow = snappy, High = slow gradual pull'
 	})
-	AimPart = AimAssist:CreateDropdown({
-		Name = 'Target area',
-		List = { 'Center', 'Closest' }
-	})
-	MouseDown = AimAssist:CreateToggle({ Name = 'Require mouse down' })
-	StrafeIncrease = AimAssist:CreateToggle({ Name = 'Strafe increase' })
-	VerticalAim = AimAssist:CreateToggle({
-		Name = 'Vertical aim',
-		Default = true,
-		Tooltip = 'When disabled, aims on the horizontal plane only (pitch is left untouched)'
-	})
-	AimSpeed = AimAssist:CreateSlider({
-		Name = 'Aim speed',
-		Min = 1,
-		Max = 20,
-		Default = 6
+	Dynamic = AimAssist:CreateSlider({
+		Name = 'Dynamic Smoothing',
+		Min = 0,
+		Max = 10,
+		Default = 5,
+		Decimal = 1,
+		Tooltip = 'Strength of the Dynamic style.\nFar target = slower pull, close target = faster'
 	})
 	Distance = AimAssist:CreateSlider({
 		Name = 'Distance',
 		Min = 1,
-		Max = 1000,
+		Max = 500,
 		Default = 30,
 		Suffix = function(val)
 			return val == 1 and 'stud' or 'studs'
-		end
-	})
-	Prediction = AimAssist:CreateSlider({
-		Name = 'Prediction',
-		Min = 0,
-		Max = 100,
-		Default = 35,
-		Suffix = '%',
-		Tooltip = 'Leads the target based on their velocity and your ping.'
-	})
-	Shake = AimAssist:CreateSlider({
-		Name = 'Shake',
-		Min = 0,
-		Max = 100,
-		Default = 0,
-		Tooltip = 'Adds random jitter to simulate human aim'
-	})
-	Smoothness = AimAssist:CreateSlider({
-		Name = 'Smoothness',
-		Min = 1,
-		Max = 100,
-		Default = 100,
-		Tooltip = 'How gradually the crosshair eases into the target. Lower values decelerate more near the target, feeling more human'
-	})
-	Overshoot = AimAssist:CreateSlider({
-		Name = 'Overshoot',
-		Min = 0,
-		Max = 100,
-		Default = 50,
-		Tooltip = 'Flicks slightly past the target and settles back, like a human flick. 0 = off'
-	})
-	Reaction = AimAssist:CreateSlider({
-		Name = 'Reaction delay',
-		Min = 0,
-		Max = 400,
-		Default = 150,
-		Suffix = function()
-			return 'ms'
 		end,
-		Tooltip = 'Randomized delay before starting to aim on a new target, in ms. 0 = off'
+		Tooltip = 'How far targets can be locked onto.'
 	})
-	MaxTurn = AimAssist:CreateSlider({
-		Name = 'Max turn speed',
-		Min = 0,
-		Max = 360,
-		Default = 0,
-		Suffix = function()
-			return 'deg/s'
-		end,
-		Tooltip = 'Hard cap on how fast the crosshair can rotate, in degrees per second. 0 = unlimited'
-	})
-	Humanize = AimAssist:CreateDropdown({
-		Name = 'Assist mode',
-		List = { 'Simple', 'Advanced' },
-		Function = function(val)
-			local advanced = val == 'Advanced'
-			if Overshoot and Overshoot.Object then
-				Overshoot.Object.Visible = advanced
-			end
-			if Reaction and Reaction.Object then
-				Reaction.Object.Visible = advanced
-			end
-			if MaxTurn and MaxTurn.Object then
-				MaxTurn.Object.Visible = advanced
-			end
-		end,
-		Tooltip = 'Simple - clean aim only\nAdvanced - unlocks overshoot, reaction delay and max turn speed'
-	})
-	Overshoot.Object.Visible = false
-	Reaction.Object.Visible = false
-	MaxTurn.Object.Visible = false
-	AngleSlider = AimAssist:CreateSlider({
-		Name = 'Max angle',
+	Angle = AimAssist:CreateSlider({
+		Name = 'Angle',
 		Min = 1,
 		Max = 360,
-		Default = 70
+		Default = 70,
+		Suffix = 'deg',
+		Tooltip = 'Only locks on to targets inside this view cone.'
 	})
 end)
