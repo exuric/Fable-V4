@@ -956,7 +956,7 @@ run(function()
 	sound.Volume = 0.6
 	sound.Parent = game:GetService('SoundService')
 
-	HitSounds = fable.Combat:CreateModule({
+	HitSounds = fable.Categories.Combat:CreateModule({
 		Name = 'Hit Sounds',
 		Tooltip = 'Plays a sound when a nearby player takes damage.',
 		Function = function() end
@@ -1102,7 +1102,7 @@ run(function()
 		rebuild()
 	end
 
-	local KillLog = fable.Combat:CreateModule({
+	local KillLog = fable.Categories.Combat:CreateModule({
 		Name = 'Kill Log',
 		Tooltip = 'Logs knockouts and deaths of nearby players.',
 		Function = function(callback)

@@ -2194,7 +2194,7 @@ function fable:LoadGUI()
 		clickgui.Visible = not clickgui.Visible
 		if clickgui.Visible then
 			clickscale.Scale = 0.98
-			tween:Tween(clickscale, uipallet.Tween, {Scale = 1})
+			tweenService:Create(clickscale, uipallet.Tween, {Scale = 1}):Play()
 		end
 		fable:BlurCheck()
 	end))
