@@ -266,10 +266,10 @@ end
 
 uipallet = {
 	Main = Color3.fromRGB(26, 25, 26),
-	Text = Color3.fromRGB(200, 200, 200),
+	Text = Color3.fromRGB(210, 210, 210),
 	Font = Font.fromEnum(Enum.Font.Arial),
 	FontSemiBold = Font.fromEnum(Enum.Font.Arial, Enum.FontWeight.SemiBold),
-	Tween = TweenInfo.new(0.16, Enum.EasingStyle.Linear)
+	Tween = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 }
 
 do
@@ -309,8 +309,8 @@ local function addBlur(parent, notif, old)
 		blur.Parent = parent
 	else
 		blur = Instance.new('UIShadow')
-		blur.BlurRadius = UDim.new(0, 13)
-		blur.Transparency = 0.25
+		blur.BlurRadius = UDim.new(0, 18)
+		blur.Transparency = 0.35
 		blur.Parent = parent
 	end
 
@@ -319,7 +319,7 @@ end
 
 local function addCorner(parent, radius)
 	local corner = Instance.new('UICorner')
-	corner.CornerRadius = radius or UDim.new(0, 5)
+	corner.CornerRadius = radius or UDim.new(0, 6)
 	corner.Parent = parent
 
 	return corner
@@ -821,16 +821,6 @@ function fable:LoadGUI()
 	clickgui.Size = UDim2.fromScale(1, 1)
 	clickgui.Visible = false
 	clickgui.Parent = scaledgui
-	local scarcitybanner = Instance.new('TextLabel')
-	scarcitybanner.BackgroundTransparency = 1
-	scarcitybanner.FontFace = uipallet.Font
-	scarcitybanner.Position = UDim2.fromScale(0, 0.97)
-	scarcitybanner.Size = UDim2.fromScale(1, 0.02)
-	scarcitybanner.Text = 'The discord link has been fixed, click the discord icon to join.'
-	scarcitybanner.TextColor3 = Color3.new(1, 1, 1)
-	scarcitybanner.TextScaled = true
-	scarcitybanner.TextStrokeTransparency = 0.5
-	scarcitybanner.Parent = clickgui
 	local modal = Instance.new('TextButton')
 	modal.BackgroundTransparency = 1
 	modal.Modal = true
@@ -2876,8 +2866,8 @@ components = {
 		divider.Parent = window
 		local stroke = Instance.new('UIStroke')
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Color = Color3.fromRGB(85, 85, 85)
-		stroke.Transparency = 0.8
+		stroke.Color = Color3.fromRGB(255, 255, 255)
+		stroke.Transparency = 0.92
 		stroke.Parent = window
 		local windowlist = Instance.new('UIListLayout')
 		windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -3134,8 +3124,8 @@ components = {
 		divider.Parent = window
 		local stroke = Instance.new('UIStroke')
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Color = Color3.fromRGB(85, 85, 85)
-		stroke.Transparency = 0.8
+		stroke.Color = Color3.fromRGB(255, 255, 255)
+		stroke.Transparency = 0.92
 		stroke.Parent = window
 		local windowlist = Instance.new('UIListLayout')
 		windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -4363,8 +4353,8 @@ components = {
 		addTooltip(discord, 'Join discord')
 		local stroke = Instance.new('UIStroke')
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Color = Color3.fromRGB(85, 85, 85)
-		stroke.Transparency = 0.8
+		stroke.Color = Color3.fromRGB(255, 255, 255)
+		stroke.Transparency = 0.92
 		stroke.Parent = window
 		local settingspane = components.SettingsPane({
 			Name = 'Settings',
@@ -6079,8 +6069,8 @@ components = {
 		children.Parent = window
 		local stroke = Instance.new('UIStroke')
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Color = Color3.fromRGB(85, 85, 85)
-		stroke.Transparency = 0.8
+		stroke.Color = Color3.fromRGB(255, 255, 255)
+		stroke.Transparency = 0.92
 		stroke.Parent = window
 		local windowlist = Instance.new('UIListLayout')
 		windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
@@ -6450,8 +6440,8 @@ components = {
 		divider.Parent = search
 		local stroke = Instance.new('UIStroke')
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-		stroke.Color = Color3.fromRGB(85, 85, 85)
-		stroke.Transparency = 0.8
+		stroke.Color = Color3.fromRGB(255, 255, 255)
+		stroke.Transparency = 0.92
 		stroke.Parent = search
 		local windowlist = Instance.new('UIListLayout')
 		windowlist.HorizontalAlignment = Enum.HorizontalAlignment.Center
