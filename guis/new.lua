@@ -45,6 +45,7 @@ local toolblur
 local tooltip
 local TextGUI
 local scale = {Scale = 1}
+local clickscale = {Scale = 1}
 local gui
 
 local isfile = isfile or function(file)
@@ -821,6 +822,8 @@ function fable:LoadGUI()
 	clickgui.Size = UDim2.fromScale(1, 1)
 	clickgui.Visible = false
 	clickgui.Parent = scaledgui
+	clickscale = Instance.new('UIScale')
+	clickscale.Parent = clickgui
 	local modal = Instance.new('TextButton')
 	modal.BackgroundTransparency = 1
 	modal.Modal = true
@@ -2189,6 +2192,10 @@ function fable:LoadGUI()
 		end
 	
 		clickgui.Visible = not clickgui.Visible
+		if clickgui.Visible then
+			clickscale.Scale = 0.98
+			tween:Tween(clickscale, uipallet.Tween, {Scale = 1})
+		end
 		fable:BlurCheck()
 	end))
 	
