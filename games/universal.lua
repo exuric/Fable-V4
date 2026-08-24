@@ -1215,14 +1215,10 @@ run(function()
 	local Distance
 	local Angle
 
-	local acos, asin, atan2, clamp, deg, rad, min = math.acos, math.asin, math.atan2, math.clamp, math.deg, math.rad, math.min
-	local Vector2new, Vector3new = Vector2.new, Vector3.new
-	local TAU = math.pi * 2
+	local clamp, deg, acos, min = math.clamp, math.deg, math.acos, math.min
+	local Vector2new = Vector2.new
 
-	local BIND_NAME = 'FableAimAssistV2'
-	local PART_PRIORITY = { 'Head', 'UpperTorso', 'Torso', 'HumanoidRootPart' }
 	local lasttarget, started = nil, 0
-	local curYaw, curPitch = nil, nil
 
 	local function smoothstep(t)
 		t = clamp(t, 0, 1)
@@ -1231,11 +1227,6 @@ run(function()
 
 	local function easeInOut(t)
 		return t < 0.5 and 4 * t * t * t or 1 - (-2 * t + 2) ^ 3 / 2
-	end
-
-	local function dropAimState()
-		curYaw, curPitch = nil, nil
-		lasttarget = nil
 	end
 
 	local function getTarget()
@@ -1261,154 +1252,100 @@ run(function()
 		return ent, prev
 	end
 
-	local function getLead(target, camPos)
+	local function getGoalPosition(target)
+		local char = target.Character
+		local part = (char and char:FindFirstChild('Head')) or target.RootPart or target.HumanoidRootPart
+		if not part then return nil end
+
+		local pos = part.Position
+
 		local ok, vel = pcall(function()
-			return target.RootPart.AssemblyLinearVelocity
+			return part.AssemblyLinearVelocity
 		end)
 
-		if not ok or typeof(vel) ~= 'Vector3' or vel.Magnitude < 0.5 then
-			return Vector3.zero
+		if ok and typeof(vel) == 'Vector3' and vel.Magnitude >= 0.5 then
+			local ping = 0
+			pcall(function()
+				ping = playersService.LocalPlayer:GetNetworkPing()
+			end)
+
+			local pred = clamp(0.125 + ping * 0.25, 0.12, 0.22)
+			pos += Vector3.new(vel.X * pred, vel.Y * pred * 0.6, vel.Z * pred)
 		end
 
-		local dist = (target.RootPart.Position - camPos).Magnitude
-		local leadTime = clamp(0.06 + dist / 900, 0.06, 0.22)
-		return Vector3new(vel.X, vel.Y * 0.35, vel.Z) * leadTime
-	end
-
-	local function pickAimPosition(target, camPos)
-		local char = target.Character
-
-		for i, name in ipairs(PART_PRIORITY) do
-			local part = char and char:FindFirstChild(name)
-
-			if part and part:IsA('BasePart') then
-				local pos = part.Position
-
-				if not entitylib.Wallcheck(camPos, pos) then
-					return pos
-				end
-
-				if i >= 3 then break end
-			end
-		end
-
-		local fallback = target.RootPart or target.HumanoidRootPart
-		return fallback and fallback.Position or nil
+		return pos
 	end
 
 	local function onStep(dt)
 		local cam = workspace.CurrentCamera
 		if not cam or not cam.Parent then return end
-		if not entitylib.isAlive then
-			dropAimState()
-			return
-		end
-
-		if fable.gui.ScaledGui.ClickGui.Visible then
-			dropAimState()
-			return
-		end
-
-		local camPos = cam.CFrame.Position
+		if not entitylib.isAlive then return end
+		if fable.gui.ScaledGui.ClickGui.Visible then return end
 
 		local target, prev = getTarget()
-		if not target then
-			dropAimState()
-			return
-		end
+		if not target then return end
 
 		local retain = target == prev
 		local anchor = target.RootPart or target.Head
-		if not anchor or not anchor.Parent then
-			dropAimState()
-			return
-		end
+		if not anchor or not anchor.Parent then return end
 
-		local aimPos = pickAimPosition(target, camPos)
-		if not aimPos then
-			dropAimState()
-			return
-		end
+		local camPos = cam.CFrame.Position
+		local toTarget = anchor.Position - camPos
+		if toTarget.Magnitude < 0.05 then return end
 
-		aimPos += getLead(target, camPos)
-
-		if not curYaw then
-			curPitch, curYaw = cam.CFrame:ToOrientation()
-		end
-
-		local dir = aimPos - camPos
-		if dir.Magnitude < 0.05 then return end
-
-		local dYaw = (atan2(-dir.X, -dir.Z) - curYaw + math.pi) % TAU - math.pi
-		local dPitch = (asin(clamp(dir.Y / dir.Magnitude, -1, 1)) - curPitch + math.pi) % TAU - math.pi
-		local aimErrDeg = deg((dYaw * dYaw + dPitch * dPitch) ^ 0.5)
-
+		local errDeg = deg(acos(clamp(cam.CFrame.LookVector:Dot(toTarget.Unit), -1, 1)))
 		local cone = Angle.Value
-		if aimErrDeg > cone / 2 and not (retain and aimErrDeg <= cone * 0.75) then
-			dropAimState()
+
+		if errDeg > cone / 2 and not (retain and errDeg <= cone * 0.75) then
+			lasttarget = nil
 			return
 		end
+
+		local goal = getGoalPosition(target)
+		if not goal then return end
 
 		targetinfo.Targets[target] = tick() + 1
 
-		local amount = clamp(Smoothing.Value, 0, 10)
-		local base = (10.5 - amount) * 0.35
-		local style = Style.Value
-		local alpha
+		local goalCF = CFrame.new(camPos, goal)
 
-		if style == 'Linear' then
-			alpha = clamp(base * dt, 0, 1)
-		elseif style == 'Exponential' then
-			local closeness = 1 - clamp(aimErrDeg / 60, 0, 1)
-			alpha = clamp(base * (0.3 + 2.2 * closeness) * dt, 0, 1)
+		local amount = clamp(Smoothing.Value, 0, 10)
+		local alpha = clamp((10 - amount) / 9, 0.05, 1)
+
+		local style = Style.Value
+
+		if style == 'Exponential' then
+			local closeness = 1 - clamp(errDeg / 50, 0, 1)
+			alpha *= 0.35 + 1.65 * closeness
 		elseif style == 'Bezier Curve' then
-			alpha = smoothstep(base * 2.5 * dt)
-		else
+			alpha = smoothstep(alpha)
+		elseif style == 'Dynamic' then
 			local dyn = clamp(Dynamic.Value, 0, 10) / 10
-			local farFactor = clamp(aimErrDeg / 45, 0, 1)
-			alpha = clamp(base * (1 - dyn * 0.75 * farFactor + dyn * 0.35 * (1 - farFactor)) * dt, 0, 1)
+			local farFactor = clamp(errDeg / 40, 0, 1)
+			alpha *= 1 - dyn * 0.7 * farFactor + dyn * 0.4 * (1 - farFactor)
 		end
 
 		if Mode.Value == 'Adaptive' then
-			local prog = min(tick() - started, 1)
-			local errBoost = 0.4 + 1.2 * clamp(aimErrDeg / 30, 0, 1)
-			alpha = alpha * (0.45 + 0.55 * easeInOut(prog)) * errBoost
+			local prog = easeInOut(min(tick() - started, 1))
+			alpha *= (0.5 + 0.5 * prog) * (0.6 + 0.8 * clamp(errDeg / 25, 0, 1))
 		end
 
-		local maxStepDeg = (90 + (10 - amount) * 40) * dt
-		if aimErrDeg > 0.001 then
-			alpha = min(alpha, maxStepDeg / aimErrDeg)
-		end
+		alpha = clamp(alpha, 0, 1)
+		alpha = 1 - (1 - alpha) ^ (dt * 60)
 
-		curYaw = curYaw + dYaw * alpha
-		curPitch = clamp(curPitch + dPitch * alpha, rad(-80), rad(80))
-
-		cam.CFrame = CFrame.new(camPos) * CFrame.fromOrientation(curPitch, curYaw, 0)
+		cam.CFrame = cam.CFrame:Lerp(goalCF, alpha)
 	end
 
 	AimAssist = fable.Categories.Combat:CreateModule({
 		Name = 'Aim Assist',
-		Tooltip = 'Advanced camera lock with selectable smoothing styles.',
+		Tooltip = 'Classic Da Hood camlock with selectable smoothing styles.',
 		Function = function(callback)
 			if callback then
-				pcall(function()
-					runService:UnbindFromRenderStep(BIND_NAME)
-				end)
-				runService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, onStep)
+				table.insert(AimAssist.Connections, runService.RenderStepped:Connect(onStep))
 			else
-				pcall(function()
-					runService:UnbindFromRenderStep(BIND_NAME)
-				end)
-				dropAimState()
+				lasttarget = nil
 			end
 		end
 	})
-
-	fable:Clean(function()
-		pcall(function()
-			runService:UnbindFromRenderStep(BIND_NAME)
-		end)
-	end)
 
 	Mode = AimAssist:CreateDropdown({
 		Name = 'Mode',
@@ -1418,7 +1355,7 @@ run(function()
 	Style = AimAssist:CreateDropdown({
 		Name = 'Smoothing Style',
 		List = { 'Linear', 'Exponential', 'Bezier Curve', 'Dynamic' },
-		Tooltip = 'Linear - constant pull speed, predictable\nExponential - pulls faster the closer you are\nBezier Curve - smooth acceleration and deceleration, most natural\nDynamic - auto adjusts smoothing based on distance (uses Dynamic Smoothing)'
+		Tooltip = 'Linear - constant pull speed, predictable\nExponential - pulls faster the closer you are\nBezier Curve - smooth acceleration and deceleration\nDynamic - auto adjusts smoothing based on distance (uses Dynamic Smoothing)'
 	})
 	Smoothing = AimAssist:CreateSlider({
 		Name = 'Smoothing Amount',
