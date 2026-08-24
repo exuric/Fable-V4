@@ -948,13 +948,29 @@ run(function()
 	local CircleObject
 	local RightClick
 	local ShowTarget
+	local AssistMode
+	local SmoothingAmount
+	local SmoothingStyle
+	local DynamicSmoothing
+	local MaxDistance
+	local MaxAngle
 	local moveConst = Vector2.new(1, 0.77) * math.rad(0.5)
+	local lastAimTarget, aimStarted = nil, 0
 	
 	local function wrapAngle(num)
 		num = num % math.pi
 		num -= num >= (math.pi / 2) and math.pi or 0
 		num += num < -(math.pi / 2) and math.pi or 0
 		return num
+	end
+
+	local function smoothstep(t)
+		t = math.clamp(t, 0, 1)
+		return t * t * (3 - 2 * t)
+	end
+
+	local function easeInOut(t)
+		return t < 0.5 and 4 * t * t * t or 1 - (-2 * t + 2) ^ 3 / 2
 	end
 	
 	AimAssist = fable.Categories.Combat:CreateModule({
@@ -981,24 +997,80 @@ run(function()
 							Wallcheck = Targets.Walls.Enabled,
 							Origin = gameCamera.CFrame.Position
 						})
-	
+
 						if ent then
+							-- Distance check (world distance)
+							if MaxDistance.Value < 500 then
+								local myPos = entitylib.isAlive and entitylib.character.RootPart and entitylib.character.RootPart.Position
+								if myPos and (ent[Part.Value].Position - myPos).Magnitude > MaxDistance.Value then
+									return
+								end
+							end
+
 							local facing = gameCamera.CFrame.LookVector
 							local new = (ent[Part.Value].Position - gameCamera.CFrame.Position).Unit
 							new = new == new and new or Vector3.zero
-	
+
+							-- Angle check
+							if new ~= Vector3.zero then
+								local diffYawCheck = wrapAngle(math.atan2(facing.X, facing.Z) - math.atan2(new.X, new.Z))
+								local diffPitchCheck = math.asin(facing.Y) - math.asin(new.Y)
+								local errDeg = math.deg(math.sqrt(diffYawCheck * diffYawCheck + diffPitchCheck * diffPitchCheck))
+								if errDeg > MaxAngle.Value / 2 then
+									return
+								end
+							end
+
+							-- Always activate target info overlay when assist is working
+							targetinfo.Targets[ent] = tick() + 1
 							if ShowTarget.Enabled then
 								targetinfo.Targets[ent] = tick() + 1
+							end
+
+							-- track target switch for Adaptive
+							if ent ~= lastAimTarget then
+								lastAimTarget = ent
+								aimStarted = tick()
 							end
 	
 							if new ~= Vector3.zero then
 								local diffYaw = wrapAngle(math.atan2(facing.X, facing.Z) - math.atan2(new.X, new.Z))
 								local diffPitch = math.asin(facing.Y) - math.asin(new.Y)
+								local errDeg = math.deg(math.sqrt(diffYaw * diffYaw + diffPitch * diffPitch))
 								local angle = Vector2.new(diffYaw, diffPitch) // (moveConst * UserSettings():GetService('UserGameSettings').MouseSensitivity)
-	
-								angle *= math.min(Speed.Value * dt, 1)
-								mousemoverel(angle.X, angle.Y)
+
+								-- Base speed from Vape Speed + Smoothing Amount
+								local smoothingFactor = (10.5 - SmoothingAmount.Value) / 6.5
+								if smoothingFactor < 0.08 then smoothingFactor = 0.08 end
+								local baseAlpha = math.min(Speed.Value * dt, 1) * smoothingFactor
+
+								-- Smoothing Style
+								local style = SmoothingStyle.Value
+								if style == 'Exponential' then
+									local closeness = 1 - math.clamp(errDeg / 60, 0, 1)
+									baseAlpha = baseAlpha * (0.35 + 1.65 * closeness)
+								elseif style == 'Bezier Curve' then
+									baseAlpha = smoothstep(baseAlpha * 1.2)
+								elseif style == 'Dynamic Smoothing' or style == 'Dynamic' then
+									local dyn = math.clamp(DynamicSmoothing.Value, 0, 10) / 10
+									local farFactor = math.clamp(errDeg / 45, 0, 1)
+									baseAlpha = baseAlpha * (1 - dyn * 0.7 * farFactor + dyn * 0.35 * (1 - farFactor))
+								end
+
+								-- Mode Adaptive
+								if AssistMode.Value == 'Adaptive' then
+									local prog = math.min(tick() - aimStarted, 1)
+									local errBoost = 0.45 + 0.55 * easeInOut(prog)
+									errBoost *= (0.5 + 0.5 * math.clamp(1 - errDeg / 30, 0, 1) + 0.5)
+									-- simpler: boost when close, slight boost when far
+									baseAlpha = baseAlpha * errBoost
+								end
+
+								angle *= math.clamp(baseAlpha, 0, 1)
+								pcall(mousemoverel, angle.X, angle.Y)
 							end
+						else
+							lastAimTarget = nil
 						end
 					end
 				end))
@@ -1017,6 +1089,8 @@ run(function()
 						end
 					end))
 				end
+			else
+				lastAimTarget = nil
 			end
 		end,
 		Tooltip = 'Smoothly aims to closest valid target'
@@ -1042,6 +1116,50 @@ run(function()
 		Min = 0,
 		Max = 30,
 		Default = 15
+	})
+	AssistMode = AimAssist:CreateDropdown({
+		Name = 'Mode',
+		List = {'Simple', 'Adaptive'},
+		Tooltip = 'Simple - constant pull\nAdaptive - adapts smoothing based on distance and time on target'
+	})
+	SmoothingAmount = AimAssist:CreateSlider({
+		Name = 'Smoothing Amount',
+		Min = 0,
+		Max = 10,
+		Default = 4,
+		Decimal = 1,
+		Tooltip = 'How fast the assist pulls your aim toward target\nLow = snappy, High = slow gradual pull'
+	})
+	SmoothingStyle = AimAssist:CreateDropdown({
+		Name = 'Smoothing Style',
+		List = {'Linear', 'Exponential', 'Bezier Curve', 'Dynamic Smoothing'},
+		Tooltip = 'Linear - constant pull speed, predictable\nExponential - pulls faster the closer you are\nBezier Curve - smooth acceleration and deceleration, most natural\nDynamic Smoothing - auto adjusts based on distance (uses Dynamic Smoothing slider)'
+	})
+	DynamicSmoothing = AimAssist:CreateSlider({
+		Name = 'Dynamic Smoothing',
+		Min = 0,
+		Max = 10,
+		Default = 5,
+		Decimal = 1,
+		Tooltip = 'Strength of Dynamic Smoothing\nFar target = slower pull, close target = faster'
+	})
+	MaxDistance = AimAssist:CreateSlider({
+		Name = 'Distance',
+		Min = 1,
+		Max = 500,
+		Default = 500,
+		Suffix = function(val)
+			return val == 1 and 'stud' or 'studs'
+		end,
+		Tooltip = 'Maximum world distance to lock onto targets'
+	})
+	MaxAngle = AimAssist:CreateSlider({
+		Name = 'Angle',
+		Min = 1,
+		Max = 360,
+		Default = 360,
+		Suffix = 'deg',
+		Tooltip = 'Maximum view angle to lock onto targets'
 	})
 	AimAssist:CreateToggle({
 		Name = 'Range Circle',
